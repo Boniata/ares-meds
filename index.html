@@ -64,6 +64,12 @@ body { font-family:-apple-system,'SF Pro Text','Helvetica Neue',sans-serif; back
 .badge { font-size:11px; font-weight:600; padding:2px 7px; border-radius:20px; }
 .badge.green{background:rgba(52,199,89,.15);color:#248A3D;} .badge.orange{background:rgba(255,149,0,.15);color:#C93400;} .badge.red{background:rgba(255,59,48,.15);color:#D70015;} .badge.gray{background:rgba(120,120,128,.12);color:var(--text2);}
 .med-arrow { color:var(--text3); font-size:18px; }
+.med-days { display:flex; flex-direction:column; align-items:center; justify-content:center; min-width:44px; text-align:center; }
+.med-days-num { font-size:18px; font-weight:700; line-height:1; }
+.med-days-num.ok { color:var(--green); }
+.med-days-num.warn { color:var(--orange); }
+.med-days-num.danger { color:var(--red); }
+.med-days-label { font-size:10px; color:var(--text2); margin-top:2px; font-weight:500; text-transform:uppercase; letter-spacing:.4px; }
 .empty-state { text-align:center; padding:48px 32px; color:var(--text2); }
 .empty-state .empty-icon{font-size:48px;margin-bottom:12px;} .empty-state p{font-size:15px;line-height:1.5;}
 .bottom-pad { height:calc(var(--safe-bot) + 24px); }
@@ -355,13 +361,12 @@ function renderList() {
   c.innerHTML=`<div class="section-label">Medicamentos (${meds.length})</div><div class="card-list">${sorted.map(med=>{
     const st=overallStatus(med),d=daysLeft(med),ml=med.bottleMode?mlRemaining(med):null;
     const badges=[];
+    const sc=stockStatus(med),cls=sc==='danger'?'red':sc==='warn'?'orange':'green';
     if(med.bottleMode){
-      const sc=stockStatus(med),cls=sc==='danger'?'red':sc==='warn'?'orange':'green';
-      if(d!==null)badges.push(`<span class="badge ${cls}">${ml!==null?`~${Math.round(ml)}ml · `:''}~${d}d</span>`);
+      if(ml!==null) badges.push(`<span class="badge ${cls}">~${Math.round(ml)} ml</span>`);
       else badges.push(`<span class="badge gray">Jarabe</span>`);
     } else if(d!==null){
-      const sc=stockStatus(med),cls=sc==='danger'?'red':sc==='warn'?'orange':'green';
-      badges.push(`<span class="badge ${cls}">${med.stock} ${med.unit||'ud'} · ~${d}d</span>`);
+      badges.push(`<span class="badge ${cls}">${med.stock} ${med.unit||'ud'}</span>`);
     } else {
       badges.push(`<span class="badge gray">${med.stock||0} ${med.unit||'ud'}</span>`);
     }
@@ -371,7 +376,8 @@ function renderList() {
       badges.push(`<span class="badge gray">🕐 ${txt}</span>`);
     }
     const ic=med.icon||med.emoji||'💊';
-    return `<div class="med-row" data-id="${med.id}"><div class="med-icon ${st}">${iconHTML(ic)}</div><div class="med-info"><div class="med-name">${med.name}</div><div class="med-dose">${med.dose||''}</div><div class="med-badges">${badges.join('')}</div></div><div class="med-arrow">›</div></div>`;
+    const daysHTML=d!==null?`<div class="med-days"><div class="med-days-num ${sc}">${d}</div><div class="med-days-label">días</div></div>`:'';
+    return `<div class="med-row" data-id="${med.id}"><div class="med-icon ${st}">${iconHTML(ic)}</div><div class="med-info"><div class="med-name">${med.name}</div><div class="med-dose">${med.dose||''}</div><div class="med-badges">${badges.join('')}</div></div>${daysHTML}<div class="med-arrow">›</div></div>`;
   }).join('')}</div>`;
   document.querySelectorAll('.med-row').forEach(r=>r.addEventListener('click',()=>openDetail(r.dataset.id)));
 }
