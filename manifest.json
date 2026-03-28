@@ -2,7 +2,7 @@
   "name": "Medicinas · Ares",
   "short_name": "Medicinas",
   "description": "Seguimiento de medicamentos de Ares",
-  "start_url": "/ares-meds/",
+  "start_url": "/medicacion-ares/",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#F2F2F7",
