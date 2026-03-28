@@ -243,10 +243,18 @@ function mlRemaining(med) {
   const mlToday=mlConsumedToday(med);
   return Math.max(0,med.mlRestantes-mlWholeDays-mlToday);
 }
+function dailyDose(med) {
+  if(med.schedule&&med.schedule.length){
+    const sum=med.schedule.reduce((acc,s)=>{const d=typeof s==='string'?0:parseFloat(s.dose)||0;return acc+d;},0);
+    if(sum>0) return sum;
+  }
+  return med.dosePerDay||0;
+}
 function daysLeft(med) {
   if(med.bottleMode){const ml=mlRemaining(med);if(ml===null||!med.mlPerDay)return null;return Math.floor(ml/med.mlPerDay);}
-  if(!med.dosePerDay||med.dosePerDay<=0)return null;
-  return Math.floor((med.stock||0)/med.dosePerDay);
+  const dd=dailyDose(med);
+  if(!dd||dd<=0)return null;
+  return Math.floor((med.stock||0)/dd);
 }
 function stockStatus(med){const d=daysLeft(med);if(d===null)return 'ok';const a=med.alertDays||14;if(d<=a)return 'danger';if(d<=a*2)return 'warn';return 'ok';}
 function expStatus(med){if(!med.expiry)return 'ok';const d=diffDays(med.expiry);if(d<0)return 'danger';if(d<=30)return 'warn';return 'ok';}
