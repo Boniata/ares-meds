@@ -70,6 +70,7 @@ body { font-family:-apple-system,'SF Pro Text','Helvetica Neue',sans-serif; back
 .med-days-num.warn { color:var(--orange); }
 .med-days-num.danger { color:var(--red); }
 .med-days-label { font-size:10px; color:var(--text2); margin-top:2px; font-weight:500; text-transform:uppercase; letter-spacing:.4px; }
+.med-days-date { font-size:10px; color:var(--text2); margin-top:3px; }
 .empty-state { text-align:center; padding:48px 32px; color:var(--text2); }
 .empty-state .empty-icon{font-size:48px;margin-bottom:12px;} .empty-state p{font-size:15px;line-height:1.5;}
 .bottom-pad { height:calc(var(--safe-bot) + 24px); }
@@ -256,6 +257,13 @@ function daysLeft(med) {
   if(!dd||dd<=0)return null;
   return Math.floor((med.stock||0)/dd);
 }
+function runOutDate(med){
+  const d=daysLeft(med);
+  if(d===null) return null;
+  const dt=new Date();
+  dt.setDate(dt.getDate()+d);
+  return dt.toLocaleDateString('es-ES',{day:'numeric',month:'short'});
+}
 function stockStatus(med){const d=daysLeft(med);if(d===null)return 'ok';const a=med.alertDays||14;if(d<=a)return 'danger';if(d<=a*2)return 'warn';return 'ok';}
 function expStatus(med){if(!med.expiry)return 'ok';const d=diffDays(med.expiry);if(d<0)return 'danger';if(d<=30)return 'warn';return 'ok';}
 function overallStatus(med){const s=stockStatus(med),e=expStatus(med);if(s==='danger'||e==='danger')return 'danger';if(s==='warn'||e==='warn')return 'warn';return 'ok';}
@@ -385,7 +393,8 @@ function renderList() {
       badges.push(`<span class="badge gray">🕐 ${txt}</span>`);
     }
     const ic=med.icon||med.emoji||'💊';
-    const daysHTML=d!==null?`<div class="med-days"><div class="med-days-num ${sc}">${d}</div><div class="med-days-label">días</div></div>`:'';
+    const rod=runOutDate(med);
+    const daysHTML=d!==null?`<div class="med-days"><div class="med-days-num ${sc}">${d}</div><div class="med-days-label">días</div>${rod?`<div class="med-days-date">${rod}</div>`:''}</div>`:'';
     return `<div class="med-row" data-id="${med.id}"><div class="med-icon ${st}">${iconHTML(ic)}</div><div class="med-info"><div class="med-name">${med.name}</div><div class="med-dose">${med.dose||''}</div><div class="med-badges">${badges.join('')}</div></div>${daysHTML}<div class="med-arrow">›</div></div>`;
   }).join('')}</div>`;
   document.querySelectorAll('.med-row').forEach(r=>r.addEventListener('click',()=>openDetail(r.dataset.id)));
@@ -437,7 +446,6 @@ function buildForm(med){
       </div>
       <div id="stock-normal" style="${isSyrup?'display:none':''};border-top:1px solid var(--sep)">
         <div class="form-row"><label class="form-label">Unidades actuales</label><input class="form-input" id="f-stock" type="number" min="0" step="0.5" placeholder="0" value="${med.stock??''}"></div>
-        <div class="form-row"><label class="form-label">Dosis por toma</label><input class="form-input" id="f-dpd" type="number" min="0.5" step="0.5" placeholder="1" value="${med.dosePerDay??1}"></div>
         <div class="form-row"><label class="form-label">Avisar con (días)</label><input class="form-input" id="f-alert" type="number" min="1" placeholder="14" value="${!isSyrup?(med.alertDays??14):'14'}"></div>
       </div>
       <div id="stock-bottle" style="${isSyrup?'':'display:none'};border-top:1px solid var(--sep)">
@@ -520,7 +528,7 @@ function readForm(){
     base.stock=null;base.dosePerDay=null;
   } else {
     base.stock=parseFloat(document.getElementById('f-stock').value)||0;
-    base.dosePerDay=parseFloat(document.getElementById('f-dpd').value)||1;
+    base.dosePerDay=null;
     base.alertDays=parseInt(document.getElementById('f-alert').value)||14;
     base.bottleMl=null;base.mlRestantes=null;base.mlPerDay=null;
   }
