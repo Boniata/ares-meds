@@ -658,19 +658,30 @@ function scheduleNotifications() {
       const t = typeof s === 'string' ? s : s.time;
       const dose = typeof s === 'string' ? '' : s.dose;
       if (!t) return;
-      const msUntil = (parseMin(t) - now) * 60000;
-      if (msUntil > 0 && msUntil <= 12 * 3600000) {
-        const unit = med.bottleMode ? 'ml' : (med.unit || 'ud');
-        const body = dose ? `${dose} ${unit}` : '';
+      const schedMin = parseMin(t);
+      const unit = med.bottleMode ? 'ml' : (med.unit || 'ud');
+      const doseStr = dose ? ` · ${dose} ${unit}` : '';
+      // Aviso 15 min antes
+      const msWarning = (schedMin - 15 - now) * 60000;
+      if (msWarning > 0 && msWarning <= 12 * 3600000) {
         notifTimeouts.push(setTimeout(() => {
-          swReg.showNotification(`💊 ${med.name}`, {
-            body: body || 'Hora de la toma',
-            icon: '/icon.svg',
-            badge: '/icon.svg',
-            tag: `${med.id}-${t}`,
-            renotify: false
+          swReg.showNotification(`⏰ ${med.name} en 15 min`, {
+            body: `Toma a las ${t}${doseStr}`,
+            icon: '/icon.svg', badge: '/icon.svg',
+            tag: `${med.id}-${t}-warn`, renotify: false
           });
-        }, msUntil));
+        }, msWarning));
+      }
+      // Aviso en el momento
+      const msNow = (schedMin - now) * 60000;
+      if (msNow > 0 && msNow <= 12 * 3600000) {
+        notifTimeouts.push(setTimeout(() => {
+          swReg.showNotification(`💊 ${med.name} — ahora`, {
+            body: `Hora de la toma${doseStr}`,
+            icon: '/icon.svg', badge: '/icon.svg',
+            tag: `${med.id}-${t}`, renotify: true
+          });
+        }, msNow));
       }
     });
   });
