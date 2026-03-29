@@ -20,19 +20,6 @@
   --badge-green-text:#248A3D; --badge-orange-text:#C93400; --badge-red-text:#D70015;
   --safe-top:env(safe-area-inset-top,0px); --safe-bot:env(safe-area-inset-bottom,0px);
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg:#1C1C1E; --card:#2C2C2E; --text:#FFFFFF; --text2:#AEAEB2; --text3:#636366;
-    --sep:rgba(84,84,88,.65); --toggle-off:#3A3A3C;
-    --badge-green-text:#30D158; --badge-orange-text:#FF9F0A; --badge-red-text:#FF453A;
-  }
-  .header { background:rgba(28,28,30,.85); }
-  .sheet { background:var(--bg); }
-  .form-input[type="date"] { color-scheme:dark; }
-  .badge.green { color:var(--badge-green-text); }
-  .badge.orange { color:var(--badge-orange-text); }
-  .badge.red { color:var(--badge-red-text); }
-}
 body { font-family:-apple-system,'SF Pro Text','Helvetica Neue',sans-serif; background:var(--bg); color:var(--text); min-height:100dvh; overflow-x:hidden; }
 
 /* ── Header ── */
@@ -128,6 +115,21 @@ body { font-family:-apple-system,'SF Pro Text','Helvetica Neue',sans-serif; back
 .loading { text-align:center; padding:48px 32px; color:var(--text2); font-size:15px; }
 
 @keyframes slideIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#1C1C1E; --card:#2C2C2E; --text:#FFFFFF; --text2:#AEAEB2; --text3:#636366;
+    --sep:rgba(84,84,88,.65); --toggle-off:#3A3A3C;
+    --badge-green-text:#30D158; --badge-orange-text:#FF9F0A; --badge-red-text:#FF453A;
+  }
+  .header { background:rgba(28,28,30,.85) !important; }
+  .sheet { background:var(--bg); }
+  .form-input[type="date"] { color-scheme:dark; }
+  .badge.green { color:var(--badge-green-text) !important; }
+  .badge.orange { color:var(--badge-orange-text) !important; }
+  .badge.red { color:var(--badge-red-text) !important; }
+  .med-row:active { background:rgba(255,255,255,.06); }
+}
 </style>
 </head>
 <body>
@@ -231,11 +233,20 @@ function dailyDose(med) {
   }
   return med.dosePerDay||0;
 }
+function effectiveStock(med) {
+  const stock=med.stock||0;
+  if(!med.lastUpdated) return stock;
+  const dd=dailyDose(med);
+  if(!dd||dd<=0) return stock;
+  const daysElapsed=Math.max(0,-diffDays(med.lastUpdated));
+  const consumedToday=mlConsumedToday(med);
+  return Math.max(0,stock-daysElapsed*dd-consumedToday);
+}
 function daysLeft(med) {
   if(med.bottleMode){const ml=mlRemaining(med);if(ml===null||!med.mlPerDay)return null;return Math.floor(ml/med.mlPerDay);}
   const dd=dailyDose(med);
   if(!dd||dd<=0)return null;
-  return Math.floor((med.stock||0)/dd);
+  return Math.floor(effectiveStock(med)/dd);
 }
 function runOutInfo(med){
   if(med.bottleMode){
@@ -310,7 +321,7 @@ async function deleteMed(id) {
 startListening();
 
 // ── Render ────────────────────────────────────────────────
-function render() { renderAlerts(); renderList(); }
+function render() { renderAlerts(); renderList(); scheduleNotifications(); }
 
 function renderAlerts() {
   const c=document.getElementById('alertsContainer');
@@ -492,6 +503,7 @@ function readForm(){
     base.stock=parseFloat(document.getElementById('f-stock').value)||0;
     base.dosePerDay=null;
     base.alertDays=parseInt(document.getElementById('f-alert').value)||14;
+    base.lastUpdated=today();
     base.bottleMl=null;base.mlRestantes=null;base.mlPerDay=null;
   }
   return base;
@@ -586,7 +598,7 @@ function openDetail(id){
     document.getElementById('q-minus').onclick=()=>{if(sv>0){sv--;disp.textContent=sv;}};
     document.getElementById('q-plus').onclick=()=>{sv++;disp.textContent=sv;};
     document.getElementById('q-save').onclick=async()=>{
-      await saveMed({...med,stock:sv});
+      await saveMed({...med,stock:sv,lastUpdated:today()});
       closeSheet();
     };
   }
@@ -616,7 +628,58 @@ function openDetail(id){
   openSheet();
 }
 
-setInterval(renderAlerts,60000);
+setInterval(()=>{renderAlerts();scheduleNotifications();},60000);
+
+// ── Notifications ─────────────────────────────────────────
+let swReg = null;
+let notifTimeouts = [];
+
+async function setupSW() {
+  if (!('serviceWorker' in navigator)) return;
+  try { swReg = await navigator.serviceWorker.register('/sw.js'); } catch(e) {}
+}
+
+async function requestNotifPermission() {
+  if (!('Notification' in window)) return false;
+  if (Notification.permission === 'granted') return true;
+  if (Notification.permission === 'denied') return false;
+  const p = await Notification.requestPermission();
+  return p === 'granted';
+}
+
+function scheduleNotifications() {
+  if (!swReg || Notification.permission !== 'granted') return;
+  notifTimeouts.forEach(clearTimeout);
+  notifTimeouts = [];
+  const now = nowMin();
+  meds.forEach(med => {
+    if (!med.schedule) return;
+    med.schedule.forEach(s => {
+      const t = typeof s === 'string' ? s : s.time;
+      const dose = typeof s === 'string' ? '' : s.dose;
+      if (!t) return;
+      const msUntil = (parseMin(t) - now) * 60000;
+      if (msUntil > 0 && msUntil <= 12 * 3600000) {
+        const unit = med.bottleMode ? 'ml' : (med.unit || 'ud');
+        const body = dose ? `${dose} ${unit}` : '';
+        notifTimeouts.push(setTimeout(() => {
+          swReg.showNotification(`💊 ${med.name}`, {
+            body: body || 'Hora de la toma',
+            icon: '/icon.svg',
+            badge: '/icon.svg',
+            tag: `${med.id}-${t}`,
+            renotify: false
+          });
+        }, msUntil));
+      }
+    });
+  });
+}
+
+setupSW().then(async () => {
+  const granted = await requestNotifPermission();
+  if (granted) scheduleNotifications();
+});
 
 // ── App icon (iOS Add to Home Screen) ─────────────────────
 (function(){
