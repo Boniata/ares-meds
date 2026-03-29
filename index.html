@@ -111,6 +111,9 @@ body { font-family:-apple-system,'SF Pro Text','Helvetica Neue',sans-serif; back
 .btn-inline { border:none; border-radius:10px; padding:8px 14px; font-size:14px; font-weight:600; font-family:inherit; cursor:pointer; color:#fff; }
 .btn-inline.blue{background:var(--blue);} .btn-inline.green{background:var(--green);}
 
+.btn-notif { width:34px; height:34px; border-radius:50%; background:var(--card); border:none; font-size:17px; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:transform .1s; box-shadow:0 1px 4px rgba(0,0,0,.1); }
+.btn-notif:active { transform:scale(.92); }
+
 /* Loading */
 .loading { text-align:center; padding:48px 32px; color:var(--text2); font-size:15px; }
 
@@ -129,7 +132,10 @@ body { font-family:-apple-system,'SF Pro Text','Helvetica Neue',sans-serif; back
   .badge.orange { color:var(--badge-orange-text) !important; }
   .badge.red { color:var(--badge-red-text) !important; }
   .med-row:active { background:rgba(255,255,255,.06); }
+  .alert-item.dose-done { background:rgba(52,199,89,.08); border-left:3px solid var(--green); }
+  .btn-notif { background:var(--card); }
 }
+.alert-item.dose-done { background:rgba(52,199,89,.08); border-left:3px solid var(--green); opacity:.75; }
 </style>
 </head>
 <body>
@@ -139,6 +145,7 @@ body { font-family:-apple-system,'SF Pro Text','Helvetica Neue',sans-serif; back
   <div class="header">
     <div><div class="header-title">💊 Medicinas</div><div class="header-sub">Seguimiento de Ares</div></div>
     <div class="header-right">
+      <button class="btn-notif" id="btnNotif" title="Notificaciones">🔕</button>
       <button class="btn-add" id="btnAdd">+</button>
     </div>
   </div>
@@ -292,6 +299,11 @@ function doseAlerts(med){
     .map(s=>{const t=typeof s==='string'?s:s.time,dose=typeof s==='string'?'':s.dose||'',diff=parseMin(t)-now;return{time:t,dose,label:diff>0?`en ${diff} min`:diff===0?'¡ahora!':`hace ${Math.abs(diff)} min`};});
 }
 
+// ── Dose tracking (localStorage) ─────────────────────────
+function doneKey(medId,time){return `done-${medId}-${time}-${today()}`;}
+function isDone(medId,time){return !!localStorage.getItem(doneKey(medId,time));}
+window.markDone=function(medId,time){localStorage.setItem(doneKey(medId,time),'1');renderAlerts();};
+
 // ── Firestore ─────────────────────────────────────────────
 function medsCol() { return collection(db, 'meds'); }
 
@@ -334,9 +346,13 @@ function renderAlerts() {
   const items=[];
   meds.forEach(med=>{
     doseAlerts(med).forEach(a=>{
+      const done=isDone(med.id,a.time);
       const schedUnit=med.bottleMode?'ml':(med.unit||'ud');
       const dtxt=a.dose?` · ${a.dose} ${schedUnit}`:'';
-      items.push({dot:'blue',cls:'dose-now',text:`<strong>${med.name}</strong> <span>— toma ${a.time}${dtxt} (${a.label})</span>`});
+      const action=done
+        ?`<span style="color:var(--green);font-size:20px;font-weight:700;flex-shrink:0">✓</span>`
+        :`<button onclick="markDone('${med.id}','${a.time}')" style="flex-shrink:0;background:none;border:1.5px solid var(--sep);border-radius:8px;padding:5px 12px;font-size:13px;font-weight:600;color:var(--blue);cursor:pointer;font-family:inherit">Dada</button>`;
+      items.push({dot:done?'green':'blue',cls:done?'dose-done':'dose-now',text:`<strong>${med.name}</strong> <span>— toma ${a.time}${dtxt} (${a.label})</span>`,action});
     });
     const ss=stockStatus(med),es=expStatus(med),d=daysLeft(med);
     if(ss==='danger'&&d!==null)items.push({dot:'red',text:`<strong>${med.name}</strong> <span>— quedan ~${d} días. ¡Pide ya!</span>`});
@@ -345,7 +361,7 @@ function renderAlerts() {
     else if(es==='warn'){const dd=diffDays(med.expiry);items.push({dot:'orange',text:`<strong>${med.name}</strong> <span>— caduca en ${dd} días (${fmt(med.expiry)}).</span>`});}
   });
   if(!items.length){c.innerHTML='';return;}
-  c.innerHTML=`<div class="section-label">Avisos</div><div class="alerts">${items.map(i=>`<div class="alert-item ${i.cls||''}"><div class="alert-dot ${i.dot}"></div><div class="alert-text">${i.text}</div></div>`).join('')}</div>`;
+  c.innerHTML=`<div class="section-label">Avisos</div><div class="alerts">${items.map(i=>`<div class="alert-item ${i.cls||''}"><div class="alert-dot ${i.dot}"></div><div class="alert-text">${i.text}</div>${i.action||''}</div>`).join('')}</div>`;
 }
 
 function renderList() {
@@ -560,9 +576,20 @@ function openDetail(id){
           <button class="btn-inline blue" id="q-save">Guardar</button>
         </div>
       </div>
-      <div class="form-row" style="border-top:1px solid var(--sep);justify-content:space-between">
-        <span class="form-label" style="line-height:1.4">Frasco nuevo<br><span style="font-size:12px;color:var(--text2)">Descuenta tomas ya dadas hoy</span></span>
-        <button class="btn-inline green" id="q-newbottle">Abrir ahora</button>
+      <div id="newbottle-wrap" style="border-top:1px solid var(--sep)">
+        <div class="form-row" style="justify-content:space-between">
+          <span class="form-label" style="line-height:1.4">Frasco nuevo<br><span style="font-size:12px;color:var(--text2)">Descuenta tomas ya dadas hoy</span></span>
+          <button class="btn-inline green" id="q-newbottle">Abrir ahora</button>
+        </div>
+        <div id="newbottle-expiry" style="display:none;border-top:1px solid var(--sep)">
+          <div class="form-row" style="justify-content:space-between">
+            <span class="form-label">Fecha caducidad</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <input id="nb-expiry" type="date" style="border:1.5px solid var(--sep);border-radius:10px;padding:6px 8px;font-size:15px;font-family:inherit;background:var(--bg);color:var(--text);color-scheme:light">
+              <button class="btn-inline green" id="nb-confirm">Confirmar</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>`:`
     <div class="form-section-label">Stock rápido</div>
@@ -594,8 +621,14 @@ function openDetail(id){
       await saveMed({...med,mlRestantes:v,lastUpdated:today()});
       closeSheet();
     };
-    document.getElementById('q-newbottle').onclick=async()=>{
-      await saveMed({...med,mlRestantes:calcNewBottle(),lastUpdated:today()});
+    document.getElementById('q-newbottle').onclick=()=>{
+      const wrap=document.getElementById('newbottle-expiry');
+      wrap.style.display=wrap.style.display==='none'?'':'none';
+    };
+    document.getElementById('nb-confirm').onclick=async()=>{
+      const expiry=document.getElementById('nb-expiry').value;
+      if(!expiry){document.getElementById('nb-expiry').focus();return;}
+      await saveMed({...med,mlRestantes:calcNewBottle(),lastUpdated:today(),expiry});
       closeSheet();
     };
   } else {
@@ -693,9 +726,23 @@ function scheduleNotifications() {
   });
 }
 
-setupSW().then(async () => {
-  const granted = await requestNotifPermission();
-  if (granted) scheduleNotifications();
+function updateNotifBtn() {
+  const btn=document.getElementById('btnNotif');
+  if(!btn||!('Notification' in window)) return;
+  btn.textContent=Notification.permission==='granted'?'🔔':'🔕';
+  btn.title=Notification.permission==='granted'?'Notificaciones activas':'Activar notificaciones';
+}
+
+document.getElementById('btnNotif').addEventListener('click',async()=>{
+  await setupSW();
+  const granted=await requestNotifPermission();
+  updateNotifBtn();
+  if(granted) scheduleNotifications();
+});
+
+setupSW().then(()=>{
+  updateNotifBtn();
+  if(Notification.permission==='granted') scheduleNotifications();
 });
 
 // ── App icon (iOS Add to Home Screen) ─────────────────────
