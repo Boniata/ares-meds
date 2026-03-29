@@ -300,6 +300,12 @@ function startListening() {
   document.getElementById('medList').innerHTML = '<div class="loading">Cargando…</div>';
   unsubscribe = onSnapshot(query(medsCol()), snap => {
     meds = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    // Migrar meds sin lastUpdated para que el contador descuente desde hoy
+    meds.forEach(med => {
+      if (!med.bottleMode && !med.lastUpdated && dailyDose(med) > 0) {
+        saveMed({ ...med, lastUpdated: today() });
+      }
+    });
     render();
   });
 }
