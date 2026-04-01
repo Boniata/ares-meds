@@ -656,7 +656,7 @@ function openDetail(id){
     document.getElementById('q-plus').onclick=()=>{sv++;disp.textContent=sv;};
     document.getElementById('q-save').onclick=async()=>{
       // Fix Issue 1: Add back today's scheduled doses to store raw midnight value
-      const rawStock = sv + scheduledDosesToday(med);
+      const rawStock = sv + mlConsumedToday(med);
       await saveMed({...med,stock:rawStock,lastUpdated:today()});
       closeSheet();
     };
