@@ -672,7 +672,7 @@ setInterval(()=>{renderAlerts();scheduleNotifications();},60000);
 
 // ── Notifications ─────────────────────────────────────────
 let swReg = null;
-let notifTimeouts = []; // [{id, due}]  — 'due' es timestamp Date.now() en ms
+let notifTimeouts = []; // [{id, medId, due}]  — 'due' es timestamp Date.now() en ms
 
 async function setupSW() {
   if (!('serviceWorker' in navigator)) return;
@@ -732,7 +732,7 @@ function scheduleNotifications() {
     if (due - now > 90000) { clearTimeout(id); return false; }
     return true;
   });
-  const scheduled = new Set(notifTimeouts.map(({due}) => due));
+  const scheduled = new Set(notifTimeouts.map(({medId, due}) => `${medId}-${due}`));
 
   meds.forEach(med => {
     if (!med.schedule) return;
@@ -747,9 +747,10 @@ function scheduleNotifications() {
       const unit    = med.bottleMode ? 'ml' : (med.unit || 'ud');
       const doseStr = dose ? ` · ${dose} ${unit}` : '';
       // Aviso en el momento
-      if (!scheduled.has(due)) {
-        scheduled.add(due);
-        notifTimeouts.push({ due, id: setTimeout(() => showNotif(`💊 ${med.name} — ahora`, {
+      const scheduledKey = `${med.id}-${due}`;
+      if (!scheduled.has(scheduledKey)) {
+        scheduled.add(scheduledKey);
+        notifTimeouts.push({ medId: med.id, due, id: setTimeout(() => showNotif(`💊 ${med.name} — ahora`, {
           body: `Hora de la toma${doseStr}`,
           icon: '/icon.svg', badge: '/icon.svg',
           tag: `${med.id}-${t}`, renotify: true
@@ -757,9 +758,10 @@ function scheduleNotifications() {
       }
       // Aviso 15 min antes
       const duew = due - 15 * 60000;
-      if (duew > now && !scheduled.has(duew)) {
-        scheduled.add(duew);
-        notifTimeouts.push({ due: duew, id: setTimeout(() => showNotif(`⏰ ${med.name} en 15 min`, {
+      const scheduledKeyWarn = `${med.id}-${duew}`;
+      if (duew > now && !scheduled.has(scheduledKeyWarn)) {
+        scheduled.add(scheduledKeyWarn);
+        notifTimeouts.push({ medId: med.id, due: duew, id: setTimeout(() => showNotif(`⏰ ${med.name} en 15 min`, {
           body: `Toma a las ${t}${doseStr}`,
           icon: '/icon.svg', badge: '/icon.svg',
           tag: `${med.id}-${t}-warn`, renotify: false
