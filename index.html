@@ -691,21 +691,34 @@ async function requestNotifPermission() {
 
 async function showNotif(title, options) {
   if (Notification.permission !== 'granted') return;
-  try {
-    const reg = await Promise.race([
-      navigator.serviceWorker.ready,
-      new Promise((_, rej) => setTimeout(() => rej('timeout'), 4000))
-    ]);
-    // En iOS solo funciona desde el propio SW — usamos postMessage
-    if (reg.active) {
-      reg.active.postMessage({ type: 'SHOW_NOTIFICATION', title, options });
-    } else {
-      await reg.showNotification(title, options);
-    }
-  } catch(e) {
-    // Fallback para navegadores no-iOS
-    try { new Notification(title, options); } catch(e2) {}
+  // 1) Intenta showNotification directo desde el registro (funciona en Chrome/Android/desktop)
+  if ('serviceWorker' in navigator) {
+    try {
+      const reg = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise((_, rej) => setTimeout(() => rej('timeout'), 3000))
+      ]);
+      if (reg?.showNotification) {
+        await reg.showNotification(title, options);
+        return;
+      }
+    } catch(e) {}
   }
+  // 2) Fallback: postMessage al SW (ruta necesaria en iOS PWA)
+  if ('serviceWorker' in navigator) {
+    try {
+      const reg = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise((_, rej) => setTimeout(() => rej('timeout'), 3000))
+      ]);
+      if (reg?.active) {
+        reg.active.postMessage({ type: 'SHOW_NOTIFICATION', title, options });
+        return;
+      }
+    } catch(e) {}
+  }
+  // 3) Último recurso: API directa (no funciona en iOS, sí en Firefox/escritorio)
+  try { new Notification(title, options); } catch(_) {}
 }
 
 function scheduleNotifications() {
@@ -776,13 +789,47 @@ document.getElementById('btnNotif').addEventListener('click', async () => {
   }
 });
 
+// Muestra notificaciones de tomas que debían dispararse mientras la app estaba suspendida
+function checkMissedNotifications() {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  const now = Date.now();
+  meds.forEach(med => {
+    if (!med.schedule) return;
+    med.schedule.forEach(s => {
+      const t    = typeof s === 'string' ? s : s.time;
+      const dose = typeof s === 'string' ? '' : s.dose;
+      if (!t || isDone(med.id, t)) return;
+      const [h, m] = t.split(':').map(Number);
+      const dt = new Date(); dt.setHours(h, m, 0, 0);
+      const dueMs = dt.getTime();
+      const elapsed = now - dueMs; // ms desde que debía sonar
+      if (elapsed > 0 && elapsed <= 30 * 60000) { // pasó hace ≤30 min
+        const mins = Math.round(elapsed / 60000);
+        const unit = med.bottleMode ? 'ml' : (med.unit || 'ud');
+        const doseStr = dose ? ` · ${dose} ${unit}` : '';
+        showNotif(`⚠️ ${med.name} — hace ${mins} min`, {
+          body: `Toma de las ${t}${doseStr}`,
+          icon: '/icon.svg', badge: '/icon.svg',
+          tag: `${med.id}-${t}-missed`, renotify: false
+        });
+      }
+    });
+  });
+}
+
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && Notification.permission === 'granted') scheduleNotifications();
+  if (document.visibilityState === 'visible' && Notification.permission === 'granted') {
+    checkMissedNotifications();
+    scheduleNotifications();
+  }
 });
 
 setupSW().then(() => {
   updateNotifBtn();
-  if (Notification.permission === 'granted') scheduleNotifications();
+  if (Notification.permission === 'granted') {
+    checkMissedNotifications();
+    scheduleNotifications();
+  }
 });
 
 // ── App icon (iOS Add to Home Screen) ─────────────────────
