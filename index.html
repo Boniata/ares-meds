@@ -266,7 +266,13 @@ function runOutInfo(med){
     .filter(s=>s.time&&s.dose>0)
     .sort((a,b)=>a.time.localeCompare(b.time));
   if(slots.length){
-    let stock=effectiveStock(med);
+    // Fix: Add back doses taken today so simulation starts from midnight stock
+    const dosesTakenToday = (med.schedule||[]).reduce((sum,s)=>{
+      const t=typeof s==='string'?s:s.time;
+      const d=typeof s==='string'?0:parseFloat(s.dose)||0;
+      return (t&&parseMin(t)<=nowMin()&&d>0)?sum+d:sum;
+    },0);
+    let stock=effectiveStock(med)+dosesTakenToday;
     const base=new Date(); base.setHours(0,0,0,0);
     let result=null;
     for(let day=0;day<=730;day++){
@@ -319,6 +325,10 @@ function startListening() {
       }
     });
     render();
+    // Fix Issue 3: Check missed notifications after meds are populated
+    if (Notification.permission === 'granted') {
+      checkMissedNotifications();
+    }
   });
 }
 
@@ -792,6 +802,9 @@ document.getElementById('btnNotif').addEventListener('click', async () => {
   }
 });
 
+// Track shown missed notifications to prevent duplicates
+const shownMissedNotifs = new Set();
+
 // Muestra notificaciones de tomas que debían dispararse mientras la app estaba suspendida
 function checkMissedNotifications() {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
@@ -807,14 +820,20 @@ function checkMissedNotifications() {
       const dueMs = dt.getTime();
       const elapsed = now - dueMs; // ms desde que debía sonar
       if (elapsed > 0 && elapsed <= 30 * 60000) { // pasó hace ≤30 min
+        const tag = `${med.id}-${t}-missed`;
+        // Skip if already shown
+        if (shownMissedNotifs.has(tag)) return;
+
         const mins = Math.round(elapsed / 60000);
         const unit = med.bottleMode ? 'ml' : (med.unit || 'ud');
         const doseStr = dose ? ` · ${dose} ${unit}` : '';
         showNotif(`⚠️ ${med.name} — hace ${mins} min`, {
           body: `Toma de las ${t}${doseStr}`,
           icon: '/icon.svg', badge: '/icon.svg',
-          tag: `${med.id}-${t}-missed`, renotify: false
+          tag: tag, renotify: false
         });
+        // Mark as shown
+        shownMissedNotifs.add(tag);
       }
     });
   });
@@ -829,8 +848,9 @@ document.addEventListener('visibilitychange', () => {
 
 setupSW().then(() => {
   updateNotifBtn();
+  // Fix Issue 3: Don't call checkMissedNotifications here - it will be called from onSnapshot
+  // after meds are populated. scheduleNotifications is safe because it handles empty meds array.
   if (Notification.permission === 'granted') {
-    checkMissedNotifications();
     scheduleNotifications();
   }
 });
