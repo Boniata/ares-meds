@@ -225,6 +225,13 @@ function mlConsumedToday(med) {
     return (t&&parseMin(t)<=now&&d>0)?sum+d:sum;
   },0);
 }
+function scheduledDosesToday(med) {
+  if(!med.schedule||!med.schedule.length) return 0;
+  return med.schedule.reduce((sum,s)=>{
+    const d=typeof s==='string'?0:parseFloat(s.dose)||0;
+    return sum+d;
+  },0);
+}
 function mlRemaining(med) {
   if(!med.bottleMode||med.mlRestantes==null||!med.mlPerDay) return null;
   const ref=med.lastUpdated||today();
@@ -266,7 +273,13 @@ function runOutInfo(med){
     .filter(s=>s.time&&s.dose>0)
     .sort((a,b)=>a.time.localeCompare(b.time));
   if(slots.length){
-    let stock=med.stock||0;
+    // Fix: Add back doses taken today so simulation starts from midnight stock
+    const dosesTakenToday = (med.schedule||[]).reduce((sum,s)=>{
+      const t=typeof s==='string'?s:s.time;
+      const d=typeof s==='string'?0:parseFloat(s.dose)||0;
+      return (t&&parseMin(t)<=nowMin()&&d>0)?sum+d:sum;
+    },0);
+    let stock=effectiveStock(med)+dosesTakenToday;
     const base=new Date(); base.setHours(0,0,0,0);
     let result=null;
     for(let day=0;day<=730;day++){
@@ -319,6 +332,10 @@ function startListening() {
       }
     });
     render();
+    // Fix Issue 3: Check missed notifications after meds are populated
+    if (Notification.permission === 'granted') {
+      checkMissedNotifications();
+    }
   });
 }
 
@@ -371,15 +388,16 @@ function renderList() {
   const sorted=[...meds].sort((a,b)=>order[overallStatus(a)]-order[overallStatus(b)]);
   c.innerHTML=`<div class="section-label">Medicamentos (${meds.length})</div><div class="card-list">${sorted.map(med=>{
     const st=overallStatus(med),d=daysLeft(med),ml=med.bottleMode?mlRemaining(med):null;
+    const effStock=Math.round(effectiveStock(med));
     const badges=[];
     const sc=stockStatus(med),cls=sc==='danger'?'red':sc==='warn'?'orange':'green';
     if(med.bottleMode){
       if(ml!==null) badges.push(`<span class="badge ${cls}">~${Math.round(ml)} ml</span>`);
       else badges.push(`<span class="badge gray">Jarabe</span>`);
     } else if(d!==null){
-      badges.push(`<span class="badge ${cls}">${med.stock} ${med.unit||'ud'}</span>`);
+      badges.push(`<span class="badge ${cls}">${effStock} ${med.unit||'ud'}</span>`);
     } else {
-      badges.push(`<span class="badge gray">${med.stock||0} ${med.unit||'ud'}</span>`);
+      badges.push(`<span class="badge gray">${effStock} ${med.unit||'ud'}</span>`);
     }
     if(med.expiry){const ec=expStatus(med),cls=ec==='danger'?'red':ec==='warn'?'orange':'gray';badges.push(`<span class="badge ${cls}">Cad. ${fmt(med.expiry)}</span>`);}
     if(med.schedule&&med.schedule.length){
@@ -558,12 +576,9 @@ function openDetail(id){
 
   function calcNewBottle(){
     if(!med.bottleMl) return '';
-    const mlGiven=med.schedule&&med.schedule.length?med.schedule.reduce((sum,s)=>{
-      const t=typeof s==='string'?s:s.time;
-      const d=typeof s==='string'?0:parseFloat(s.dose)||0;
-      return(t&&parseMin(t)<=nowMin())?sum+d:sum;
-    },0):0;
-    return Math.max(0,Math.round((med.bottleMl-mlGiven)*10)/10);
+    // Fix Issue 1: Return full bottle ml (don't subtract doses taken today)
+    // because we save with lastUpdated:today() and mlRemaining will handle today's doses
+    return Math.round(med.bottleMl*10)/10;
   }
 
   const quickHTML=isSyrup?`
@@ -618,7 +633,9 @@ function openDetail(id){
     document.getElementById('q-save').onclick=async()=>{
       const v=parseFloat(document.getElementById('q-ml').value);
       if(isNaN(v)||v<0)return;
-      await saveMed({...med,mlRestantes:v,lastUpdated:today()});
+      // Fix Issue 1: Add back today's consumed ml to store raw midnight value
+      const rawMl = v + mlConsumedToday(med);
+      await saveMed({...med,mlRestantes:rawMl,lastUpdated:today()});
       closeSheet();
     };
     document.getElementById('q-newbottle').onclick=()=>{
@@ -628,16 +645,19 @@ function openDetail(id){
     document.getElementById('nb-confirm').onclick=async()=>{
       const expiry=document.getElementById('nb-expiry').value;
       if(!expiry){document.getElementById('nb-expiry').focus();return;}
+      // Fix Issue 1: calcNewBottle already accounts for doses taken, store as-is
       await saveMed({...med,mlRestantes:calcNewBottle(),lastUpdated:today(),expiry});
       closeSheet();
     };
   } else {
-    let sv=med.stock||0;
+    let sv=Math.round(effectiveStock(med));
     const disp=document.getElementById('q-val');
     document.getElementById('q-minus').onclick=()=>{if(sv>0){sv--;disp.textContent=sv;}};
     document.getElementById('q-plus').onclick=()=>{sv++;disp.textContent=sv;};
     document.getElementById('q-save').onclick=async()=>{
-      await saveMed({...med,stock:sv,lastUpdated:today()});
+      // Fix Issue 1: Add back today's scheduled doses to store raw midnight value
+      const rawStock = sv + mlConsumedToday(med);
+      await saveMed({...med,stock:rawStock,lastUpdated:today()});
       closeSheet();
     };
   }
@@ -671,7 +691,7 @@ setInterval(()=>{renderAlerts();scheduleNotifications();},60000);
 
 // ── Notifications ─────────────────────────────────────────
 let swReg = null;
-let notifTimeouts = [];
+let notifTimeouts = []; // [{id, medId, due}]  — 'due' es timestamp Date.now() en ms
 
 async function setupSW() {
   if (!('serviceWorker' in navigator)) return;
@@ -691,55 +711,81 @@ async function requestNotifPermission() {
 
 async function showNotif(title, options) {
   if (Notification.permission !== 'granted') return;
-  try {
-    const reg = await Promise.race([
-      navigator.serviceWorker.ready,
-      new Promise((_, rej) => setTimeout(() => rej('timeout'), 4000))
-    ]);
-    // En iOS solo funciona desde el propio SW — usamos postMessage
-    if (reg.active) {
-      reg.active.postMessage({ type: 'SHOW_NOTIFICATION', title, options });
-    } else {
-      await reg.showNotification(title, options);
-    }
-  } catch(e) {
-    // Fallback para navegadores no-iOS
-    try { new Notification(title, options); } catch(e2) {}
+  // 1) Intenta showNotification directo desde el registro (funciona en Chrome/Android/desktop)
+  if ('serviceWorker' in navigator) {
+    try {
+      const reg = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise((_, rej) => setTimeout(() => rej('timeout'), 3000))
+      ]);
+      if (reg?.showNotification) {
+        await reg.showNotification(title, options);
+        return;
+      }
+    } catch(e) {}
   }
+  // 2) Fallback: postMessage al SW (ruta necesaria en iOS PWA)
+  if ('serviceWorker' in navigator) {
+    try {
+      const reg = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise((_, rej) => setTimeout(() => rej('timeout'), 3000))
+      ]);
+      if (reg?.active) {
+        reg.active.postMessage({ type: 'SHOW_NOTIFICATION', title, options });
+        return;
+      }
+    } catch(e) {}
+  }
+  // 3) Último recurso: API directa (no funciona en iOS, sí en Firefox/escritorio)
+  try { new Notification(title, options); } catch(_) {}
 }
 
 function scheduleNotifications() {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  notifTimeouts.forEach(clearTimeout);
-  notifTimeouts = [];
-  const now = nowMin();
+  const now = Date.now();
+  // Elimina los ya disparados; cancela los lejanos (>90 s) para reprogramarlos
+  // Los que disparan en ≤90 s se conservan para evitar la race condition con setInterval
+  notifTimeouts = notifTimeouts.filter(({id, due}) => {
+    if (due <= now) return false;
+    if (due - now > 90000) { clearTimeout(id); return false; }
+    return true;
+  });
+  const scheduled = new Set(notifTimeouts.map(({medId, due}) => `${medId}-${due}`));
+
   meds.forEach(med => {
     if (!med.schedule) return;
     med.schedule.forEach(s => {
-      const t = typeof s === 'string' ? s : s.time;
+      const t    = typeof s === 'string' ? s : s.time;
       const dose = typeof s === 'string' ? '' : s.dose;
       if (!t) return;
-      const schedMin = parseMin(t);
-      const unit = med.bottleMode ? 'ml' : (med.unit || 'ud');
+      const [h, m] = t.split(':').map(Number);
+      const dt = new Date(); dt.setHours(h, m, 0, 0);
+      let due = dt.getTime();
+      if (due <= now) due += 86400000; // si ya pasó hoy → mañana
+      const unit    = med.bottleMode ? 'ml' : (med.unit || 'ud');
       const doseStr = dose ? ` · ${dose} ${unit}` : '';
-      // ms hasta la próxima toma; si ya pasó hoy, programa para mañana
-      let msToSched = (schedMin - now) * 60000;
-      if (msToSched <= 0) msToSched += 24 * 60 * 60000;
+      // Aviso en el momento
+      const scheduledKey = `${med.id}-${due}`;
+      if (!scheduled.has(scheduledKey)) {
+        scheduled.add(scheduledKey);
+        notifTimeouts.push({ medId: med.id, due, id: setTimeout(() => showNotif(`💊 ${med.name} — ahora`, {
+          body: `Hora de la toma${doseStr}`,
+          icon: '/icon.svg', badge: '/icon.svg',
+          tag: `${med.id}-${t}`, renotify: true
+        }), due - now) });
+      }
       // Aviso 15 min antes
-      const msWarning = msToSched - 15 * 60000;
-      if (msWarning > 0) {
-        notifTimeouts.push(setTimeout(() => showNotif(`⏰ ${med.name} en 15 min`, {
+      const duew = due - 15 * 60000;
+      const scheduledKeyWarn = `${med.id}-${duew}`;
+      if (duew > now && !scheduled.has(scheduledKeyWarn)) {
+        scheduled.add(scheduledKeyWarn);
+        notifTimeouts.push({ medId: med.id, due: duew, id: setTimeout(() => showNotif(`⏰ ${med.name} en 15 min`, {
           body: `Toma a las ${t}${doseStr}`,
           icon: '/icon.svg', badge: '/icon.svg',
           tag: `${med.id}-${t}-warn`, renotify: false
-        }), msWarning));
+        }), duew - now) });
       }
-      // Aviso en el momento
-      notifTimeouts.push(setTimeout(() => showNotif(`💊 ${med.name} — ahora`, {
-        body: `Hora de la toma${doseStr}`,
-        icon: '/icon.svg', badge: '/icon.svg',
-        tag: `${med.id}-${t}`, renotify: true
-      }), msToSched));
     });
   });
 }
@@ -765,9 +811,58 @@ document.getElementById('btnNotif').addEventListener('click', async () => {
   }
 });
 
+// Track shown missed notifications to prevent duplicates
+const shownMissedNotifs = new Set();
+
+// Muestra notificaciones de tomas que debían dispararse mientras la app estaba suspendida
+function checkMissedNotifications() {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  const now = Date.now();
+  const todayDate = today(); // Fix Issue 2: Include date in tag for daily reset
+  meds.forEach(med => {
+    if (!med.schedule) return;
+    med.schedule.forEach(s => {
+      const t    = typeof s === 'string' ? s : s.time;
+      const dose = typeof s === 'string' ? '' : s.dose;
+      if (!t || isDone(med.id, t)) return;
+      const [h, m] = t.split(':').map(Number);
+      const dt = new Date(); dt.setHours(h, m, 0, 0);
+      const dueMs = dt.getTime();
+      const elapsed = now - dueMs; // ms desde que debía sonar
+      if (elapsed > 0 && elapsed <= 30 * 60000) { // pasó hace ≤30 min
+        const tag = `${med.id}-${t}-missed-${todayDate}`; // Fix Issue 2: Include date
+        // Skip if already shown
+        if (shownMissedNotifs.has(tag)) return;
+
+        const mins = Math.round(elapsed / 60000);
+        const unit = med.bottleMode ? 'ml' : (med.unit || 'ud');
+        const doseStr = dose ? ` · ${dose} ${unit}` : '';
+        showNotif(`⚠️ ${med.name} — hace ${mins} min`, {
+          body: `Toma de las ${t}${doseStr}`,
+          icon: '/icon.svg', badge: '/icon.svg',
+          tag: tag, renotify: false
+        });
+        // Mark as shown
+        shownMissedNotifs.add(tag);
+      }
+    });
+  });
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && Notification.permission === 'granted') {
+    checkMissedNotifications();
+    scheduleNotifications();
+  }
+});
+
 setupSW().then(() => {
   updateNotifBtn();
-  if (Notification.permission === 'granted') scheduleNotifications();
+  // Fix Issue 3: Don't call checkMissedNotifications here - it will be called from onSnapshot
+  // after meds are populated. scheduleNotifications is safe because it handles empty meds array.
+  if (Notification.permission === 'granted') {
+    scheduleNotifications();
+  }
 });
 
 // ── App icon (iOS Add to Home Screen) ─────────────────────
